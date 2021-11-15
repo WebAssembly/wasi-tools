@@ -1,0 +1,11 @@
+[package]
+name = "wai-abi"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+anyhow = "1.0"
+heck = "0.3"
+structopt = { version = "0.3", default-features = false }
+wai-parser = { git = 'https://github.com/bytecodealliance/wai-bindgen' }
