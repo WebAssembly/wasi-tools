@@ -183,19 +183,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5fecdca9a5291cc2b8dcf7dc02453fee791a280f3743cb0905f8822ae463b3fe"
 
 [[package]]
-name = "wai-abi"
+name = "wit-abi"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "heck",
  "structopt",
- "wai-parser",
+ "wit-parser",
 ]
 
 [[package]]
-name = "wai-parser"
+name = "wit-parser"
 version = "0.1.0"
-source = "git+https://github.com/bytecodealliance/wai-bindgen#de2ad3427aa0f02613d913015fa8e81b73a2ae41"
+source = "git+https://github.com/bytecodealliance/wit-bindgen#63f0e22c71b084be8e0aa81b4a66b4a8a3ab95ef"
 dependencies = [
  "anyhow",
  "id-arena",
