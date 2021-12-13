@@ -5,8 +5,8 @@ use std::env;
 use std::fs;
 use std::path::Path;
 use structopt::StructOpt;
-use wai_parser::abi::AbiVariant;
-use wai_parser::*;
+use wit_parser::abi::AbiVariant;
+use wit_parser::*;
 
 #[derive(Debug, StructOpt)]
 struct Options {
@@ -20,7 +20,7 @@ struct Options {
     #[structopt(long)]
     export: bool,
 
-    /// Files and/or directories to walk and look for `*.wai.md` files within.
+    /// Files and/or directories to walk and look for `*.wit.md` files within.
     files: Vec<String>,
 }
 
@@ -59,7 +59,7 @@ impl Options {
             None => return Ok(()),
         };
         let filestem = match path.file_name().and_then(|s| s.to_str()) {
-            Some(name) => match name.strip_suffix(".wai.md") {
+            Some(name) => match name.strip_suffix(".wit.md") {
                 Some(name) => name,
                 None => return Ok(()),
             },
