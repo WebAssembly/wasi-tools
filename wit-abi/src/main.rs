@@ -5,7 +5,6 @@ use std::env;
 use std::fs;
 use std::path::Path;
 use structopt::StructOpt;
-use wit_parser::abi::AbiVariant;
 use wit_parser::*;
 
 #[derive(Debug, StructOpt)]
@@ -14,11 +13,6 @@ struct Options {
     /// they're up-to-date with the source files.
     #[structopt(long)]
     check: bool,
-
-    /// Indicates whether ABI files are for guest exports (or if not specified
-    /// if they're for guest imports).
-    #[structopt(long)]
-    export: bool,
 
     /// Files and/or directories to walk and look for `*.wit.md` files within.
     files: Vec<String>,
@@ -69,7 +63,6 @@ impl Options {
             .with_context(|| format!("failed to parse input {:?}", path))?;
 
         let mut markdown = Markdown {
-            opts: self,
             src: String::new(),
             sizes: Default::default(),
             hrefs: HashMap::default(),
@@ -93,8 +86,7 @@ impl Options {
     }
 }
 
-pub struct Markdown<'a> {
-    opts: &'a Options,
+pub struct Markdown {
     src: String,
     sizes: SizeAlign,
     hrefs: HashMap<String, String>,
@@ -102,14 +94,9 @@ pub struct Markdown<'a> {
     types: usize,
 }
 
-impl Markdown<'_> {
+impl Markdown {
     fn process(&mut self, iface: &Interface) {
-        let variant = if self.opts.export {
-            AbiVariant::GuestExport
-        } else {
-            AbiVariant::GuestImport
-        };
-        self.sizes.fill(variant, iface);
+        self.sizes.fill(iface);
 
         for (id, ty) in iface.types.iter() {
             let name = match &ty.name {
@@ -118,17 +105,19 @@ impl Markdown<'_> {
             };
             match &ty.kind {
                 TypeDefKind::Record(record) => self.type_record(iface, id, name, record, &ty.docs),
+                TypeDefKind::Tuple(tuple) => self.type_tuple(iface, id, name, tuple, &ty.docs),
+                TypeDefKind::Flags(flags) => self.type_flags(iface, id, name, flags, &ty.docs),
                 TypeDefKind::Variant(variant) => {
                     self.type_variant(iface, id, name, variant, &ty.docs)
                 }
                 TypeDefKind::Type(t) => self.type_alias(iface, id, name, t, &ty.docs),
-                TypeDefKind::List(_)
-                | TypeDefKind::Pointer(_)
-                | TypeDefKind::ConstPointer(_)
-                | TypeDefKind::PushBuffer(_)
-                | TypeDefKind::PullBuffer(_) => {
-                    self.type_alias(iface, id, name, &Type::Id(id), &ty.docs)
+                TypeDefKind::List(_) => self.type_alias(iface, id, name, &Type::Id(id), &ty.docs),
+                TypeDefKind::Enum(enum_) => self.type_enum(iface, id, name, enum_, &ty.docs),
+                TypeDefKind::Option(type_) => self.type_option(iface, id, name, type_, &ty.docs),
+                TypeDefKind::Expected(expected) => {
+                    self.type_expected(iface, id, name, expected, &ty.docs)
                 }
+                TypeDefKind::Union(union) => self.type_union(iface, id, name, union, &ty.docs),
             }
         }
 
@@ -163,19 +152,10 @@ impl Markdown<'_> {
                     self.src.push_str("\n");
                 }
             }
-            if func.results.len() > 0 {
-                self.src.push_str("##### Results\n\n");
-                for (name, ty) in func.results.iter() {
-                    self.src.push_str(&format!(
-                        "- <a href=\"#{f}.{p}\" name=\"{f}.{p}\"></a> `{}`: ",
-                        name,
-                        f = func.name.to_snake_case(),
-                        p = name.to_snake_case(),
-                    ));
-                    self.print_ty(iface, ty, false);
-                    self.src.push_str("\n");
-                }
-            }
+            self.src.push_str("##### Result\n\n");
+            self.src.push_str(&format!("- ",));
+            self.print_ty(iface, &func.result, false);
+            self.src.push_str("\n");
 
             self.src.push_str("\n");
         }
@@ -193,7 +173,7 @@ impl Markdown<'_> {
         self.src.push_str("record\n\n");
         self.print_type_info(id, docs);
         self.src.push_str("\n### Record Fields\n\n");
-        for (i, field) in record.fields.iter().enumerate() {
+        for field in record.fields.iter() {
             self.src.push_str(&format!(
                 "- <a href=\"{r}.{f}\" name=\"{r}.{f}\"></a> [`{name}`](#{r}.{f}): ",
                 r = name.to_snake_case(),
@@ -207,9 +187,55 @@ impl Markdown<'_> {
             self.print_ty(iface, &field.ty, false);
             self.src.push_str("\n\n");
             self.docs(&field.docs);
-            if record.is_flags() {
-                self.src.push_str(&format!("Bit: {}\n", i));
-            }
+            self.src.push_str("\n");
+        }
+    }
+
+    fn type_tuple(
+        &mut self,
+        iface: &Interface,
+        id: TypeId,
+        name: &str,
+        tuple: &Tuple,
+        docs: &Docs,
+    ) {
+        self.print_type_header(name);
+        self.src.push_str("tuple\n\n");
+        self.print_type_info(id, docs);
+        self.src.push_str("\n### Tuple Types\n\n");
+        for field in tuple.types.iter() {
+            self.src.push_str(&format!("- ",));
+            self.print_ty(iface, &field, false);
+            self.src.push_str("\n");
+        }
+    }
+
+    fn type_flags(
+        &mut self,
+        _iface: &Interface,
+        id: TypeId,
+        name: &str,
+        record: &Flags,
+        docs: &Docs,
+    ) {
+        self.print_type_header(name);
+        self.src.push_str("flags\n\n");
+        self.print_type_info(id, docs);
+        self.src.push_str("\n### Flags Fields\n\n");
+        for (i, field) in record.flags.iter().enumerate() {
+            self.src.push_str(&format!(
+                "- <a href=\"{r}.{f}\" name=\"{r}.{f}\"></a> [`{name}`](#{r}.{f})",
+                r = name.to_snake_case(),
+                f = field.name.to_snake_case(),
+                name = field.name,
+            ));
+            self.hrefs.insert(
+                format!("{}::{}", name, field.name),
+                format!("#{}.{}", name.to_snake_case(), field.name.to_snake_case()),
+            );
+            self.src.push_str("\n\n");
+            self.docs(&field.docs);
+            self.src.push_str(&format!("Bit: {}\n", i));
             self.src.push_str("\n");
         }
     }
@@ -237,14 +263,92 @@ impl Markdown<'_> {
                 format!("{}::{}", name, case.name),
                 format!("#{}.{}", name.to_snake_case(), case.name.to_snake_case()),
             );
-            if let Some(ty) = &case.ty {
-                self.src.push_str(": ");
-                self.print_ty(iface, ty, false);
-            }
+            self.src.push_str(": ");
+            self.print_ty(iface, &case.ty, false);
             self.src.push_str("\n\n");
             self.docs(&case.docs);
             self.src.push_str("\n");
         }
+    }
+
+    fn type_enum(&mut self, _iface: &Interface, id: TypeId, name: &str, enum_: &Enum, docs: &Docs) {
+        self.print_type_header(name);
+        self.src.push_str("enum\n\n");
+        self.print_type_info(id, docs);
+        self.src.push_str("\n### Enum Cases\n\n");
+        for case in enum_.cases.iter() {
+            self.src.push_str(&format!(
+                "- <a href=\"{v}.{c}\" name=\"{v}.{c}\"></a> [`{name}`](#{v}.{c})",
+                v = name.to_snake_case(),
+                c = case.name.to_snake_case(),
+                name = case.name,
+            ));
+            self.hrefs.insert(
+                format!("{}::{}", name, case.name),
+                format!("#{}.{}", name.to_snake_case(), case.name.to_snake_case()),
+            );
+            self.src.push_str("\n\n");
+            self.docs(&case.docs);
+            self.src.push_str("\n");
+        }
+    }
+
+    fn type_union(
+        &mut self,
+        iface: &Interface,
+        id: TypeId,
+        name: &str,
+        union: &Union,
+        docs: &Docs,
+    ) {
+        self.print_type_header(name);
+        self.src.push_str("union\n\n");
+        self.print_type_info(id, docs);
+        self.src.push_str("\n### Union Cases\n\n");
+        for case in union.cases.iter() {
+            self.src.push_str(&format!("- ",));
+            self.print_ty(iface, &case.ty, false);
+            self.src.push_str("\n\n");
+            self.docs(&case.docs);
+            self.src.push_str("\n");
+        }
+    }
+
+    fn type_option(
+        &mut self,
+        iface: &Interface,
+        id: TypeId,
+        name: &str,
+        type_: &Type,
+        docs: &Docs,
+    ) {
+        self.print_type_header(name);
+        self.src.push_str("option\n\n");
+        self.print_type_info(id, docs);
+        self.src.push_str("\n### Option\n\n");
+        self.src.push_str(&format!("- ",));
+        self.print_ty(iface, &type_, false);
+        self.src.push_str("\n\n");
+    }
+
+    fn type_expected(
+        &mut self,
+        iface: &Interface,
+        id: TypeId,
+        name: &str,
+        expected: &Expected,
+        docs: &Docs,
+    ) {
+        self.print_type_header(name);
+        self.src.push_str("expected\n\n");
+        self.print_type_info(id, docs);
+        self.src.push_str("\n### Expected\n\n");
+        self.src.push_str(&format!("- ok: ",));
+        self.print_ty(iface, &expected.ok, false);
+        self.src.push_str("\n");
+        self.src.push_str(&format!("- err: ",));
+        self.print_ty(iface, &expected.err, false);
+        self.src.push_str("\n\n");
     }
 
     fn type_alias(&mut self, iface: &Interface, id: TypeId, name: &str, ty: &Type, docs: &Docs) {
@@ -257,6 +361,8 @@ impl Markdown<'_> {
 
     fn print_ty(&mut self, iface: &Interface, ty: &Type, skip_name: bool) {
         match ty {
+            Type::Unit => self.src.push_str("`unit`"),
+            Type::Bool => self.src.push_str("`bool`"),
             Type::U8 => self.src.push_str("`u8`"),
             Type::S8 => self.src.push_str("`s8`"),
             Type::U16 => self.src.push_str("`u16`"),
@@ -265,11 +371,10 @@ impl Markdown<'_> {
             Type::S32 => self.src.push_str("`s32`"),
             Type::U64 => self.src.push_str("`u64`"),
             Type::S64 => self.src.push_str("`s64`"),
-            Type::F32 => self.src.push_str("`f32`"),
-            Type::F64 => self.src.push_str("`f64`"),
+            Type::Float32 => self.src.push_str("`float32`"),
+            Type::Float64 => self.src.push_str("`float64`"),
             Type::Char => self.src.push_str("`char`"),
-            Type::CChar => self.src.push_str("`c_char`"),
-            Type::Usize => self.src.push_str("`usize`"),
+            Type::String => self.src.push_str("`string`"),
             Type::Handle(id) => {
                 self.src.push_str("handle<");
                 self.src.push_str(&iface.resources[*id].name);
@@ -289,39 +394,30 @@ impl Markdown<'_> {
                 }
                 match &ty.kind {
                     TypeDefKind::Type(t) => self.print_ty(iface, t, false),
-                    TypeDefKind::Record(r) => {
-                        assert!(r.is_tuple());
+                    TypeDefKind::Tuple(t) => {
                         self.src.push_str("(");
-                        for (i, f) in r.fields.iter().enumerate() {
+                        for (i, f) in t.types.iter().enumerate() {
                             if i > 0 {
                                 self.src.push_str(", ");
                             }
-                            self.print_ty(iface, &f.ty, false);
+                            self.print_ty(iface, &f, false);
                         }
                         self.src.push_str(")");
                     }
-                    TypeDefKind::Variant(v) => {
-                        if v.is_bool() {
-                            self.src.push_str("`bool`");
-                        } else if let Some(t) = v.as_option() {
-                            self.src.push_str("option<");
-                            self.print_ty(iface, t, false);
-                            self.src.push_str(">");
-                        } else if let Some((ok, err)) = v.as_expected() {
-                            self.src.push_str("expected<");
-                            match ok {
-                                Some(t) => self.print_ty(iface, t, false),
-                                None => self.src.push_str("_"),
-                            }
-                            self.src.push_str(", ");
-                            match err {
-                                Some(t) => self.print_ty(iface, t, false),
-                                None => self.src.push_str("_"),
-                            }
-                            self.src.push_str(">");
-                        } else {
-                            unreachable!()
-                        }
+                    TypeDefKind::Option(t) => {
+                        self.src.push_str("option<");
+                        self.print_ty(iface, t, false);
+                        self.src.push_str(">");
+                    }
+                    TypeDefKind::Expected(Expected { ok, err }) => {
+                        self.src.push_str("expected<");
+                        self.print_ty(iface, ok, false);
+                        self.src.push_str(", ");
+                        self.print_ty(iface, err, false);
+                        self.src.push_str(">");
+                    }
+                    TypeDefKind::Variant(_v) => {
+                        unreachable!()
                     }
                     TypeDefKind::List(Type::Char) => self.src.push_str("`string`"),
                     TypeDefKind::List(t) => {
@@ -329,24 +425,46 @@ impl Markdown<'_> {
                         self.print_ty(iface, t, false);
                         self.src.push_str(">");
                     }
-                    TypeDefKind::PushBuffer(t) => {
-                        self.src.push_str("push-buffer<");
-                        self.print_ty(iface, t, false);
+                    TypeDefKind::Record(record) => {
+                        self.src.push_str("record<");
+                        for (i, f) in record.fields.iter().enumerate() {
+                            if i > 0 {
+                                self.src.push_str(", ");
+                            }
+                            self.src.push_str(&f.name);
+                            self.src.push_str(": ");
+                            self.print_ty(iface, &f.ty, false);
+                        }
                         self.src.push_str(">");
                     }
-                    TypeDefKind::PullBuffer(t) => {
-                        self.src.push_str("pull-buffer<");
-                        self.print_ty(iface, t, false);
+                    TypeDefKind::Flags(flags) => {
+                        self.src.push_str("flags<");
+                        for (i, f) in flags.flags.iter().enumerate() {
+                            if i > 0 {
+                                self.src.push_str(", ");
+                            }
+                            self.src.push_str(&f.name);
+                        }
                         self.src.push_str(">");
                     }
-                    TypeDefKind::Pointer(t) => {
-                        self.src.push_str("pointer<");
-                        self.print_ty(iface, t, false);
+                    TypeDefKind::Enum(enum_) => {
+                        self.src.push_str("enum<");
+                        for (i, f) in enum_.cases.iter().enumerate() {
+                            if i > 0 {
+                                self.src.push_str(", ");
+                            }
+                            self.src.push_str(&f.name);
+                        }
                         self.src.push_str(">");
                     }
-                    TypeDefKind::ConstPointer(t) => {
-                        self.src.push_str("const-pointer<");
-                        self.print_ty(iface, t, false);
+                    TypeDefKind::Union(union) => {
+                        self.src.push_str("union<");
+                        for (i, f) in union.cases.iter().enumerate() {
+                            if i > 0 {
+                                self.src.push_str(", ");
+                            }
+                            self.print_ty(iface, &f.ty, false);
+                        }
                         self.src.push_str(">");
                     }
                 }
