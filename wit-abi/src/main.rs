@@ -118,6 +118,7 @@ impl Markdown {
                     self.type_expected(iface, id, name, expected, &ty.docs)
                 }
                 TypeDefKind::Union(union) => self.type_union(iface, id, name, union, &ty.docs),
+                TypeDefKind::Stream(stream) => self.type_stream(iface, id, name, stream, &ty.docs),
             }
         }
 
@@ -351,6 +352,26 @@ impl Markdown {
         self.src.push_str("\n\n");
     }
 
+    fn type_stream(
+        &mut self,
+        iface: &Interface,
+        id: TypeId,
+        name: &str,
+        stream: &Stream,
+        docs: &Docs,
+    ) {
+        self.print_type_header(name);
+        self.src.push_str("expected\n\n");
+        self.print_type_info(id, docs);
+        self.src.push_str("\n### Stream\n\n");
+        self.src.push_str(&format!("- ok: ",));
+        self.print_ty(iface, &stream.element, false);
+        self.src.push_str("\n");
+        self.src.push_str(&format!("- err: ",));
+        self.print_ty(iface, &stream.end, false);
+        self.src.push_str("\n\n");
+    }
+
     fn type_alias(&mut self, iface: &Interface, id: TypeId, name: &str, ty: &Type, docs: &Docs) {
         self.print_type_header(name);
         self.print_ty(iface, ty, true);
@@ -465,6 +486,13 @@ impl Markdown {
                             }
                             self.print_ty(iface, &f.ty, false);
                         }
+                        self.src.push_str(">");
+                    }
+                    TypeDefKind::Stream(Stream { element, end }) => {
+                        self.src.push_str("stream<");
+                        self.print_ty(iface, element, false);
+                        self.src.push_str(", ");
+                        self.print_ty(iface, end, false);
                         self.src.push_str(">");
                     }
                 }
