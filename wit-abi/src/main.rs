@@ -153,7 +153,7 @@ impl Markdown {
                 }
             }
             if func.results.len() > 0 {
-                self.src.push_str("##### Result\n\n");
+                self.src.push_str("##### Results\n\n");
                 match &func.results {
                     Results::Named(results) => {
                         for (name, ty) in results.iter() {
