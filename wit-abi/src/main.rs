@@ -114,9 +114,7 @@ impl Markdown {
                 TypeDefKind::List(_) => self.type_alias(iface, id, name, &Type::Id(id), &ty.docs),
                 TypeDefKind::Enum(enum_) => self.type_enum(iface, id, name, enum_, &ty.docs),
                 TypeDefKind::Option(type_) => self.type_option(iface, id, name, type_, &ty.docs),
-                TypeDefKind::Expected(expected) => {
-                    self.type_expected(iface, id, name, expected, &ty.docs)
-                }
+                TypeDefKind::Result(result) => self.type_result(iface, id, name, result, &ty.docs),
                 TypeDefKind::Union(union) => self.type_union(iface, id, name, union, &ty.docs),
                 TypeDefKind::Future(t) => self.type_future(iface, id, name, t, &ty.docs),
                 TypeDefKind::Stream(stream) => self.type_stream(iface, id, name, stream, &ty.docs),
@@ -154,10 +152,28 @@ impl Markdown {
                     self.src.push_str("\n");
                 }
             }
-            self.src.push_str("##### Result\n\n");
-            self.src.push_str(&format!("- ",));
-            self.print_ty(iface, &func.result, false);
-            self.src.push_str("\n");
+            if func.results.len() > 0 {
+                self.src.push_str("##### Result\n\n");
+                match &func.results {
+                    Results::Named(results) => {
+                        for (name, ty) in results.iter() {
+                            self.src.push_str(&format!(
+                                "- <a href=\"#{f}.{p}\" name=\"{f}.{p}\"></a> `{}`: ",
+                                name,
+                                f = func.name.to_snake_case(),
+                                p = name.to_snake_case(),
+                            ));
+                            self.print_ty(iface, ty, false);
+                            self.src.push_str("\n");
+                        }
+                    }
+                    Results::Anon(result) => {
+                        self.src.push_str(&format!("- ",));
+                        self.print_ty(iface, &result, false);
+                        self.src.push_str("\n");
+                    }
+                }
+            }
 
             self.src.push_str("\n");
         }
@@ -265,8 +281,10 @@ impl Markdown {
                 format!("{}::{}", name, case.name),
                 format!("#{}.{}", name.to_snake_case(), case.name.to_snake_case()),
             );
-            self.src.push_str(": ");
-            self.print_ty(iface, &case.ty, false);
+            if let Some(ty) = &case.ty {
+                self.src.push_str(": ");
+                self.print_ty(iface, ty, false);
+            }
             self.src.push_str("\n\n");
             self.docs(&case.docs);
             self.src.push_str("\n");
@@ -333,24 +351,29 @@ impl Markdown {
         self.src.push_str("\n\n");
     }
 
-    fn type_expected(
+    fn type_result(
         &mut self,
         iface: &Interface,
         id: TypeId,
         name: &str,
-        expected: &Expected,
+        result: &Result_,
         docs: &Docs,
     ) {
         self.print_type_header(name);
-        self.src.push_str("expected\n\n");
+        self.src.push_str("result\n\n");
         self.print_type_info(id, docs);
-        self.src.push_str("\n### Expected\n\n");
-        self.src.push_str(&format!("- ok: ",));
-        self.print_ty(iface, &expected.ok, false);
+        self.src.push_str("\n### Result\n\n");
+        if let Some(ty) = &result.ok {
+            self.src.push_str(&format!("- ok: ",));
+            self.print_ty(iface, ty, false);
+            self.src.push_str("\n");
+        }
+        if let Some(ty) = &result.err {
+            self.src.push_str(&format!("- err: ",));
+            self.print_ty(iface, ty, false);
+            self.src.push_str("\n");
+        }
         self.src.push_str("\n");
-        self.src.push_str(&format!("- err: ",));
-        self.print_ty(iface, &expected.err, false);
-        self.src.push_str("\n\n");
     }
 
     fn type_future(
@@ -358,15 +381,17 @@ impl Markdown {
         iface: &Interface,
         id: TypeId,
         name: &str,
-        type_: &Type,
+        type_: &Option<Type>,
         docs: &Docs,
     ) {
         self.print_type_header(name);
         self.src.push_str("future\n\n");
         self.print_type_info(id, docs);
         self.src.push_str("\n### Future\n\n");
-        self.src.push_str(&format!("- ",));
-        self.print_ty(iface, &type_, false);
+        if let Some(type_) = type_ {
+            self.src.push_str(&format!("- ",));
+            self.print_ty(iface, &type_, false);
+        }
         self.src.push_str("\n\n");
     }
 
@@ -382,12 +407,17 @@ impl Markdown {
         self.src.push_str("stream\n\n");
         self.print_type_info(id, docs);
         self.src.push_str("\n### Stream\n\n");
-        self.src.push_str(&format!("- ok: ",));
-        self.print_ty(iface, &stream.element, false);
+        if let Some(ty) = &stream.element {
+            self.src.push_str(&format!("- element: ",));
+            self.print_ty(iface, ty, false);
+            self.src.push_str("\n");
+        }
+        if let Some(ty) = &stream.end {
+            self.src.push_str(&format!("- end: ",));
+            self.print_ty(iface, ty, false);
+            self.src.push_str("\n");
+        }
         self.src.push_str("\n");
-        self.src.push_str(&format!("- err: ",));
-        self.print_ty(iface, &stream.end, false);
-        self.src.push_str("\n\n");
     }
 
     fn type_alias(&mut self, iface: &Interface, id: TypeId, name: &str, ty: &Type, docs: &Docs) {
@@ -400,7 +430,6 @@ impl Markdown {
 
     fn print_ty(&mut self, iface: &Interface, ty: &Type, skip_name: bool) {
         match ty {
-            Type::Unit => self.src.push_str("`unit`"),
             Type::Bool => self.src.push_str("`bool`"),
             Type::U8 => self.src.push_str("`u8`"),
             Type::S8 => self.src.push_str("`s8`"),
@@ -448,12 +477,28 @@ impl Markdown {
                         self.print_ty(iface, t, false);
                         self.src.push_str(">");
                     }
-                    TypeDefKind::Expected(Expected { ok, err }) => {
-                        self.src.push_str("expected<");
-                        self.print_ty(iface, ok, false);
-                        self.src.push_str(", ");
-                        self.print_ty(iface, err, false);
-                        self.src.push_str(">");
+                    TypeDefKind::Result(Result_ { ok, err }) => {
+                        self.src.push_str("result");
+                        match (ok, err) {
+                            (None, None) => {}
+                            (Some(ok), None) => {
+                                self.src.push_str("<");
+                                self.print_ty(iface, ok, false);
+                                self.src.push_str(">");
+                            }
+                            (None, Some(err)) => {
+                                self.src.push_str("<_, ");
+                                self.print_ty(iface, err, false);
+                                self.src.push_str(">");
+                            }
+                            (Some(ok), Some(err)) => {
+                                self.src.push_str("<");
+                                self.print_ty(iface, ok, false);
+                                self.src.push_str(", ");
+                                self.print_ty(iface, err, false);
+                                self.src.push_str(">");
+                            }
+                        }
                     }
                     TypeDefKind::Variant(_v) => {
                         unreachable!()
@@ -507,16 +552,35 @@ impl Markdown {
                         self.src.push_str(">");
                     }
                     TypeDefKind::Future(t) => {
-                        self.src.push_str("future<");
-                        self.print_ty(iface, t, false);
-                        self.src.push_str(">");
+                        self.src.push_str("future");
+                        if let Some(ty) = t {
+                            self.src.push_str("<");
+                            self.print_ty(iface, ty, false);
+                            self.src.push_str(">");
+                        }
                     }
                     TypeDefKind::Stream(Stream { element, end }) => {
-                        self.src.push_str("stream<");
-                        self.print_ty(iface, element, false);
-                        self.src.push_str(", ");
-                        self.print_ty(iface, end, false);
-                        self.src.push_str(">");
+                        self.src.push_str("stream");
+                        match (element, end) {
+                            (None, None) => {}
+                            (Some(element), None) => {
+                                self.src.push_str("<");
+                                self.print_ty(iface, element, false);
+                                self.src.push_str(">");
+                            }
+                            (None, Some(end)) => {
+                                self.src.push_str("<_, ");
+                                self.print_ty(iface, end, false);
+                                self.src.push_str(">");
+                            }
+                            (Some(element), Some(end)) => {
+                                self.src.push_str("<");
+                                self.print_ty(iface, element, false);
+                                self.src.push_str(", ");
+                                self.print_ty(iface, end, false);
+                                self.src.push_str(">");
+                            }
+                        }
                     }
                 }
             }
