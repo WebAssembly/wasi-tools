@@ -224,8 +224,8 @@ dependencies = [
 
 [[package]]
 name = "wit-parser"
-version = "0.1.0"
-source = "git+https://github.com/bytecodealliance/wit-bindgen#206263e357ac70acd26a17b1f9ec06758b6418cd"
+version = "0.2.0"
+source = "git+https://github.com/bytecodealliance/wit-bindgen#2c3b7fede8eb5448801328bd6c523f130a06b2a7"
 dependencies = [
  "anyhow",
  "id-arena",
