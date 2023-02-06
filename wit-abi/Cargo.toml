@@ -6,7 +6,6 @@ publish = false
 
 [dependencies]
 anyhow = "1.0"
-heck = "0.3"
 clap = { version = "4.1.4", features = ["derive"] }
 wit-parser = "0.5.0"
 wit-bindgen-core = { git = "https://github.com/bytecodealliance/wit-bindgen", rev = "67c7d748cf561ee32e7f52e2d796501e875e4c50" }
