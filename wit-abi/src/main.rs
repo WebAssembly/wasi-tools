@@ -1,624 +1,169 @@
-use anyhow::{bail, Context, Result};
-use heck::*;
-use std::collections::HashMap;
-use std::env;
-use std::fs;
-use std::path::Path;
-use structopt::StructOpt;
-use wit_parser::*;
+use anyhow::{anyhow, bail, Context, Result};
+use clap::Parser;
+use std::path::PathBuf;
+use wit_bindgen_core::{wit_parser, Files, WorldGenerator};
+use wit_parser::{Resolve, UnresolvedPackage};
 
-#[derive(Debug, StructOpt)]
-struct Options {
+/// Helper for passing VERSION to opt.
+/// If CARGO_VERSION_INFO is set, use it, otherwise use CARGO_PKG_VERSION.
+fn version() -> &'static str {
+    option_env!("CARGO_VERSION_INFO").unwrap_or(env!("CARGO_PKG_VERSION"))
+}
+
+#[derive(Debug, Parser)]
+#[command(version = version())]
+enum Opt {
+    /// This generator outputs a Markdown file describing an interface.
+    #[cfg(feature = "markdown")]
+    Markdown {
+        #[clap(flatten)]
+        opts: wit_bindgen_gen_markdown::Opts,
+        #[clap(flatten)]
+        args: Common,
+    },
+    /// Generates bindings for Rust guest modules.
+    #[cfg(feature = "rust")]
+    Rust {
+        #[clap(flatten)]
+        opts: wit_bindgen_gen_guest_rust::Opts,
+        #[clap(flatten)]
+        args: Common,
+    },
+    /// Generates bindings for C/CPP guest modules.
+    #[cfg(feature = "c")]
+    C {
+        #[clap(flatten)]
+        opts: wit_bindgen_gen_guest_c::Opts,
+        #[clap(flatten)]
+        args: Common,
+    },
+
+    /// Generates bindings for TeaVM-based Java guest modules.
+    #[cfg(feature = "teavm-java")]
+    TeavmJava {
+        #[clap(flatten)]
+        opts: wit_bindgen_gen_guest_teavm_java::Opts,
+        #[clap(flatten)]
+        args: Common,
+    },
+}
+
+#[derive(Debug, Parser)]
+struct Common {
+    /// Where to place output files
+    #[clap(long = "out-dir")]
+    out_dir: Option<PathBuf>,
+
+    /// WIT document to generate bindings for.
+    #[clap(value_name = "DOCUMENT", index = 1)]
+    wit: PathBuf,
+
+    /// World within the WIT document specified to generate bindings for.
+    ///
+    /// This can either be `foo` which is the default world in document `foo` or
+    /// it's `foo.bar` which is the world named `bar` within document `foo`.
+    #[clap(short, long)]
+    world: Option<String>,
+
     /// Indicates that no files are written and instead files are checked if
     /// they're up-to-date with the source files.
-    #[structopt(long)]
+    #[clap(long)]
     check: bool,
-
-    /// Files and/or directories to walk and look for `*.wit.md` files within.
-    files: Vec<String>,
 }
 
 fn main() -> Result<()> {
-    let options = Options::from_args();
-    for arg in env::args().skip(1) {
-        let path = Path::new(&arg);
-        if path.is_dir() {
-            options.render_dir(path)?;
-        } else {
-            options.render_file(path)?;
+    let mut files = Files::default();
+    let (generator, opt) = match Opt::parse() {
+        #[cfg(feature = "markdown")]
+        Opt::Markdown { opts, args } => (opts.build(), args),
+        #[cfg(feature = "c")]
+        Opt::C { opts, args } => (opts.build(), args),
+        #[cfg(feature = "rust")]
+        Opt::Rust { opts, args } => (opts.build(), args),
+        #[cfg(feature = "teavm-java")]
+        Opt::TeavmJava { opts, args } => (opts.build(), args),
+    };
+
+    gen_world(generator, &opt, &mut files)?;
+
+    for (name, contents) in files.iter() {
+        let dst = match &opt.out_dir {
+            Some(path) => path.join(name),
+            None => name.into(),
+        };
+        println!("Generating {:?}", dst);
+
+        if opt.check {
+            let prev = std::fs::read_to_string(&dst)
+                .with_context(|| format!("failed to read {:?}", dst))?;
+            if prev.as_bytes() != contents {
+                bail!("not up to date: {}", dst.display());
+            }
+            continue;
         }
+
+        if let Some(parent) = dst.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {:?}", parent))?;
+        }
+        std::fs::write(&dst, contents).with_context(|| format!("failed to write {:?}", dst))?;
     }
+
     Ok(())
 }
 
-impl Options {
-    fn render_dir(&self, path: &Path) -> Result<()> {
-        let cx = || format!("failed to read directory {:?}", path);
-        for dir in path.read_dir().with_context(&cx)? {
-            let dir = dir.with_context(&cx)?;
-            let ty = dir.file_type().with_context(&cx)?;
-            let path = dir.path();
-            if ty.is_dir() {
-                self.render_dir(&path)?;
-            } else {
-                self.render_file(&path)?;
+fn gen_world(
+    mut generator: Box<dyn WorldGenerator>,
+    opts: &Common,
+    files: &mut Files,
+) -> Result<()> {
+    let mut resolve = Resolve::default();
+    let pkg = if opts.wit.is_dir() {
+        resolve.push_dir(&opts.wit)?.0
+    } else {
+        resolve.push(
+            UnresolvedPackage::parse_file(&opts.wit)?,
+            &Default::default(),
+        )?
+    };
+    let world = match &opts.world {
+        Some(world) => {
+            let mut parts = world.splitn(2, '.');
+            let doc = parts.next().unwrap();
+            let world = parts.next();
+            let doc = *resolve.packages[pkg]
+                .documents
+                .get(doc)
+                .ok_or_else(|| anyhow!("no document named `{doc}` in package"))?;
+            match world {
+                Some(name) => *resolve.documents[doc]
+                    .worlds
+                    .get(name)
+                    .ok_or_else(|| anyhow!("no world named `{name}` in document"))?,
+                None => resolve.documents[doc]
+                    .default_world
+                    .ok_or_else(|| anyhow!("no default world in document"))?,
             }
         }
-        Ok(())
-    }
-
-    fn render_file(&self, path: &Path) -> Result<()> {
-        let dir = match path.parent() {
-            Some(parent) => parent,
-            None => return Ok(()),
-        };
-        let filestem = match path.file_name().and_then(|s| s.to_str()) {
-            Some(name) => match name.strip_suffix(".wit.md") {
-                Some(name) => name,
-                None => return Ok(()),
-            },
-            None => return Ok(()),
-        };
-        let interface = Interface::parse_file(path)
-            .with_context(|| format!("failed to parse input {:?}", path))?;
-
-        let mut markdown = Markdown {
-            src: String::new(),
-            sizes: Default::default(),
-            hrefs: HashMap::default(),
-            funcs: 0,
-            types: 0,
-        };
-        markdown.process(&interface);
-
-        let dst = dir.join(&format!("{}.abi.md", filestem));
-        if self.check {
-            let prev =
-                fs::read_to_string(&dst).with_context(|| format!("failed to read {:?}", dst))?;
-            if prev != markdown.src {
-                bail!("not up to date: {}", dst.display());
+        None => {
+            let mut docs = resolve.packages[pkg].documents.iter();
+            let (_, doc) = docs
+                .next()
+                .ok_or_else(|| anyhow!("no documents found in package"))?;
+            if docs.next().is_some() {
+                bail!("multiple documents found in package, specify which to bind with `--world` argument")
             }
-        } else {
-            fs::write(&dst, &markdown.src).with_context(|| format!("failed to write {:?}", dst))?;
-            println!("wrote {}", dst.display());
+            resolve.documents[*doc]
+                .default_world
+                .ok_or_else(|| anyhow!("no default world in document"))?
         }
-        Ok(())
-    }
+    };
+    generator.generate(&resolve, world, files);
+    Ok(())
 }
 
-pub struct Markdown {
-    src: String,
-    sizes: SizeAlign,
-    hrefs: HashMap<String, String>,
-    funcs: usize,
-    types: usize,
-}
-
-impl Markdown {
-    fn process(&mut self, iface: &Interface) {
-        self.sizes.fill(iface);
-
-        for (id, ty) in iface.types.iter() {
-            let name = match &ty.name {
-                Some(name) => name,
-                None => continue,
-            };
-            match &ty.kind {
-                TypeDefKind::Record(record) => self.type_record(iface, id, name, record, &ty.docs),
-                TypeDefKind::Tuple(tuple) => self.type_tuple(iface, id, name, tuple, &ty.docs),
-                TypeDefKind::Flags(flags) => self.type_flags(iface, id, name, flags, &ty.docs),
-                TypeDefKind::Variant(variant) => {
-                    self.type_variant(iface, id, name, variant, &ty.docs)
-                }
-                TypeDefKind::Type(t) => self.type_alias(iface, id, name, t, &ty.docs),
-                TypeDefKind::List(_) => self.type_alias(iface, id, name, &Type::Id(id), &ty.docs),
-                TypeDefKind::Enum(enum_) => self.type_enum(iface, id, name, enum_, &ty.docs),
-                TypeDefKind::Option(type_) => self.type_option(iface, id, name, type_, &ty.docs),
-                TypeDefKind::Result(result) => self.type_result(iface, id, name, result, &ty.docs),
-                TypeDefKind::Union(union) => self.type_union(iface, id, name, union, &ty.docs),
-                TypeDefKind::Future(t) => self.type_future(iface, id, name, t, &ty.docs),
-                TypeDefKind::Stream(stream) => self.type_stream(iface, id, name, stream, &ty.docs),
-            }
-        }
-
-        for func in iface.functions.iter() {
-            if self.funcs == 0 {
-                self.src.push_str("# Functions\n\n");
-            }
-            self.funcs += 1;
-
-            self.src.push_str("----\n\n");
-            self.src.push_str(&format!(
-                "#### <a href=\"#{0}\" name=\"{0}\"></a> `",
-                func.name.to_snake_case()
-            ));
-            self.hrefs
-                .insert(func.name.clone(), format!("#{}", func.name.to_snake_case()));
-            self.src.push_str(&func.name);
-            self.src.push_str("` ");
-            self.src.push_str("\n\n");
-            self.docs(&func.docs);
-
-            if func.params.len() > 0 {
-                self.src.push_str("##### Params\n\n");
-                for (name, ty) in func.params.iter() {
-                    self.src.push_str(&format!(
-                        "- <a href=\"#{f}.{p}\" name=\"{f}.{p}\"></a> `{}`: ",
-                        name,
-                        f = func.name.to_snake_case(),
-                        p = name.to_snake_case(),
-                    ));
-                    self.print_ty(iface, ty, false);
-                    self.src.push_str("\n");
-                }
-            }
-            if func.results.len() > 0 {
-                self.src.push_str("##### Results\n\n");
-                match &func.results {
-                    Results::Named(results) => {
-                        for (name, ty) in results.iter() {
-                            self.src.push_str(&format!(
-                                "- <a href=\"#{f}.{p}\" name=\"{f}.{p}\"></a> `{}`: ",
-                                name,
-                                f = func.name.to_snake_case(),
-                                p = name.to_snake_case(),
-                            ));
-                            self.print_ty(iface, ty, false);
-                            self.src.push_str("\n");
-                        }
-                    }
-                    Results::Anon(result) => {
-                        self.src.push_str(&format!("- ",));
-                        self.print_ty(iface, &result, false);
-                        self.src.push_str("\n");
-                    }
-                }
-            }
-
-            self.src.push_str("\n");
-        }
-    }
-
-    fn type_record(
-        &mut self,
-        iface: &Interface,
-        id: TypeId,
-        name: &str,
-        record: &Record,
-        docs: &Docs,
-    ) {
-        self.print_type_header(name);
-        self.src.push_str("record\n\n");
-        self.print_type_info(id, docs);
-        self.src.push_str("\n### Record Fields\n\n");
-        for field in record.fields.iter() {
-            self.src.push_str(&format!(
-                "- <a href=\"{r}.{f}\" name=\"{r}.{f}\"></a> [`{name}`](#{r}.{f}): ",
-                r = name.to_snake_case(),
-                f = field.name.to_snake_case(),
-                name = field.name,
-            ));
-            self.hrefs.insert(
-                format!("{}::{}", name, field.name),
-                format!("#{}.{}", name.to_snake_case(), field.name.to_snake_case()),
-            );
-            self.print_ty(iface, &field.ty, false);
-            self.src.push_str("\n\n");
-            self.docs(&field.docs);
-            self.src.push_str("\n");
-        }
-    }
-
-    fn type_tuple(
-        &mut self,
-        iface: &Interface,
-        id: TypeId,
-        name: &str,
-        tuple: &Tuple,
-        docs: &Docs,
-    ) {
-        self.print_type_header(name);
-        self.src.push_str("tuple\n\n");
-        self.print_type_info(id, docs);
-        self.src.push_str("\n### Tuple Types\n\n");
-        for field in tuple.types.iter() {
-            self.src.push_str(&format!("- ",));
-            self.print_ty(iface, &field, false);
-            self.src.push_str("\n");
-        }
-    }
-
-    fn type_flags(
-        &mut self,
-        _iface: &Interface,
-        id: TypeId,
-        name: &str,
-        record: &Flags,
-        docs: &Docs,
-    ) {
-        self.print_type_header(name);
-        self.src.push_str("flags\n\n");
-        self.print_type_info(id, docs);
-        self.src.push_str("\n### Flags Fields\n\n");
-        for (i, field) in record.flags.iter().enumerate() {
-            self.src.push_str(&format!(
-                "- <a href=\"{r}.{f}\" name=\"{r}.{f}\"></a> [`{name}`](#{r}.{f})",
-                r = name.to_snake_case(),
-                f = field.name.to_snake_case(),
-                name = field.name,
-            ));
-            self.hrefs.insert(
-                format!("{}::{}", name, field.name),
-                format!("#{}.{}", name.to_snake_case(), field.name.to_snake_case()),
-            );
-            self.src.push_str("\n\n");
-            self.docs(&field.docs);
-            self.src.push_str(&format!("Bit: {}\n", i));
-            self.src.push_str("\n");
-        }
-    }
-
-    fn type_variant(
-        &mut self,
-        iface: &Interface,
-        id: TypeId,
-        name: &str,
-        variant: &Variant,
-        docs: &Docs,
-    ) {
-        self.print_type_header(name);
-        self.src.push_str("variant\n\n");
-        self.print_type_info(id, docs);
-        self.src.push_str("\n### Variant Cases\n\n");
-        for case in variant.cases.iter() {
-            self.src.push_str(&format!(
-                "- <a href=\"{v}.{c}\" name=\"{v}.{c}\"></a> [`{name}`](#{v}.{c})",
-                v = name.to_snake_case(),
-                c = case.name.to_snake_case(),
-                name = case.name,
-            ));
-            self.hrefs.insert(
-                format!("{}::{}", name, case.name),
-                format!("#{}.{}", name.to_snake_case(), case.name.to_snake_case()),
-            );
-            if let Some(ty) = &case.ty {
-                self.src.push_str(": ");
-                self.print_ty(iface, ty, false);
-            }
-            self.src.push_str("\n\n");
-            self.docs(&case.docs);
-            self.src.push_str("\n");
-        }
-    }
-
-    fn type_enum(&mut self, _iface: &Interface, id: TypeId, name: &str, enum_: &Enum, docs: &Docs) {
-        self.print_type_header(name);
-        self.src.push_str("enum\n\n");
-        self.print_type_info(id, docs);
-        self.src.push_str("\n### Enum Cases\n\n");
-        for case in enum_.cases.iter() {
-            self.src.push_str(&format!(
-                "- <a href=\"{v}.{c}\" name=\"{v}.{c}\"></a> [`{name}`](#{v}.{c})",
-                v = name.to_snake_case(),
-                c = case.name.to_snake_case(),
-                name = case.name,
-            ));
-            self.hrefs.insert(
-                format!("{}::{}", name, case.name),
-                format!("#{}.{}", name.to_snake_case(), case.name.to_snake_case()),
-            );
-            self.src.push_str("\n\n");
-            self.docs(&case.docs);
-            self.src.push_str("\n");
-        }
-    }
-
-    fn type_union(
-        &mut self,
-        iface: &Interface,
-        id: TypeId,
-        name: &str,
-        union: &Union,
-        docs: &Docs,
-    ) {
-        self.print_type_header(name);
-        self.src.push_str("union\n\n");
-        self.print_type_info(id, docs);
-        self.src.push_str("\n### Union Cases\n\n");
-        for case in union.cases.iter() {
-            self.src.push_str(&format!("- ",));
-            self.print_ty(iface, &case.ty, false);
-            self.src.push_str("\n\n");
-            self.docs(&case.docs);
-            self.src.push_str("\n");
-        }
-    }
-
-    fn type_option(
-        &mut self,
-        iface: &Interface,
-        id: TypeId,
-        name: &str,
-        type_: &Type,
-        docs: &Docs,
-    ) {
-        self.print_type_header(name);
-        self.src.push_str("option\n\n");
-        self.print_type_info(id, docs);
-        self.src.push_str("\n### Option\n\n");
-        self.src.push_str(&format!("- ",));
-        self.print_ty(iface, &type_, false);
-        self.src.push_str("\n\n");
-    }
-
-    fn type_result(
-        &mut self,
-        iface: &Interface,
-        id: TypeId,
-        name: &str,
-        result: &Result_,
-        docs: &Docs,
-    ) {
-        self.print_type_header(name);
-        self.src.push_str("result\n\n");
-        self.print_type_info(id, docs);
-        self.src.push_str("\n### Result\n\n");
-        if let Some(ty) = &result.ok {
-            self.src.push_str(&format!("- ok: ",));
-            self.print_ty(iface, ty, false);
-            self.src.push_str("\n");
-        }
-        if let Some(ty) = &result.err {
-            self.src.push_str(&format!("- err: ",));
-            self.print_ty(iface, ty, false);
-            self.src.push_str("\n");
-        }
-        self.src.push_str("\n");
-    }
-
-    fn type_future(
-        &mut self,
-        iface: &Interface,
-        id: TypeId,
-        name: &str,
-        type_: &Option<Type>,
-        docs: &Docs,
-    ) {
-        self.print_type_header(name);
-        self.src.push_str("future\n\n");
-        self.print_type_info(id, docs);
-        self.src.push_str("\n### Future\n\n");
-        if let Some(type_) = type_ {
-            self.src.push_str(&format!("- ",));
-            self.print_ty(iface, &type_, false);
-        }
-        self.src.push_str("\n\n");
-    }
-
-    fn type_stream(
-        &mut self,
-        iface: &Interface,
-        id: TypeId,
-        name: &str,
-        stream: &Stream,
-        docs: &Docs,
-    ) {
-        self.print_type_header(name);
-        self.src.push_str("stream\n\n");
-        self.print_type_info(id, docs);
-        self.src.push_str("\n### Stream\n\n");
-        if let Some(ty) = &stream.element {
-            self.src.push_str(&format!("- element: ",));
-            self.print_ty(iface, ty, false);
-            self.src.push_str("\n");
-        }
-        if let Some(ty) = &stream.end {
-            self.src.push_str(&format!("- end: ",));
-            self.print_ty(iface, ty, false);
-            self.src.push_str("\n");
-        }
-        self.src.push_str("\n");
-    }
-
-    fn type_alias(&mut self, iface: &Interface, id: TypeId, name: &str, ty: &Type, docs: &Docs) {
-        self.print_type_header(name);
-        self.print_ty(iface, ty, true);
-        self.src.push_str("\n\n");
-        self.print_type_info(id, docs);
-        self.src.push_str("\n");
-    }
-
-    fn print_ty(&mut self, iface: &Interface, ty: &Type, skip_name: bool) {
-        match ty {
-            Type::Bool => self.src.push_str("`bool`"),
-            Type::U8 => self.src.push_str("`u8`"),
-            Type::S8 => self.src.push_str("`s8`"),
-            Type::U16 => self.src.push_str("`u16`"),
-            Type::S16 => self.src.push_str("`s16`"),
-            Type::U32 => self.src.push_str("`u32`"),
-            Type::S32 => self.src.push_str("`s32`"),
-            Type::U64 => self.src.push_str("`u64`"),
-            Type::S64 => self.src.push_str("`s64`"),
-            Type::Float32 => self.src.push_str("`float32`"),
-            Type::Float64 => self.src.push_str("`float64`"),
-            Type::Char => self.src.push_str("`char`"),
-            Type::String => self.src.push_str("`string`"),
-            Type::Handle(id) => {
-                self.src.push_str("handle<");
-                self.src.push_str(&iface.resources[*id].name);
-                self.src.push_str(">");
-            }
-            Type::Id(id) => {
-                let ty = &iface.types[*id];
-                if !skip_name {
-                    if let Some(name) = &ty.name {
-                        self.src.push_str("[`");
-                        self.src.push_str(name);
-                        self.src.push_str("`](#");
-                        self.src.push_str(&name.to_snake_case());
-                        self.src.push_str(")");
-                        return;
-                    }
-                }
-                match &ty.kind {
-                    TypeDefKind::Type(t) => self.print_ty(iface, t, false),
-                    TypeDefKind::Tuple(t) => {
-                        self.src.push_str("(");
-                        for (i, f) in t.types.iter().enumerate() {
-                            if i > 0 {
-                                self.src.push_str(", ");
-                            }
-                            self.print_ty(iface, &f, false);
-                        }
-                        self.src.push_str(")");
-                    }
-                    TypeDefKind::Option(t) => {
-                        self.src.push_str("option<");
-                        self.print_ty(iface, t, false);
-                        self.src.push_str(">");
-                    }
-                    TypeDefKind::Result(Result_ { ok, err }) => {
-                        self.src.push_str("result");
-                        match (ok, err) {
-                            (None, None) => {}
-                            (Some(ok), None) => {
-                                self.src.push_str("<");
-                                self.print_ty(iface, ok, false);
-                                self.src.push_str(">");
-                            }
-                            (None, Some(err)) => {
-                                self.src.push_str("<_, ");
-                                self.print_ty(iface, err, false);
-                                self.src.push_str(">");
-                            }
-                            (Some(ok), Some(err)) => {
-                                self.src.push_str("<");
-                                self.print_ty(iface, ok, false);
-                                self.src.push_str(", ");
-                                self.print_ty(iface, err, false);
-                                self.src.push_str(">");
-                            }
-                        }
-                    }
-                    TypeDefKind::Variant(_v) => {
-                        unreachable!()
-                    }
-                    TypeDefKind::List(Type::Char) => self.src.push_str("`string`"),
-                    TypeDefKind::List(t) => {
-                        self.src.push_str("list<");
-                        self.print_ty(iface, t, false);
-                        self.src.push_str(">");
-                    }
-                    TypeDefKind::Record(record) => {
-                        self.src.push_str("record<");
-                        for (i, f) in record.fields.iter().enumerate() {
-                            if i > 0 {
-                                self.src.push_str(", ");
-                            }
-                            self.src.push_str(&f.name);
-                            self.src.push_str(": ");
-                            self.print_ty(iface, &f.ty, false);
-                        }
-                        self.src.push_str(">");
-                    }
-                    TypeDefKind::Flags(flags) => {
-                        self.src.push_str("flags<");
-                        for (i, f) in flags.flags.iter().enumerate() {
-                            if i > 0 {
-                                self.src.push_str(", ");
-                            }
-                            self.src.push_str(&f.name);
-                        }
-                        self.src.push_str(">");
-                    }
-                    TypeDefKind::Enum(enum_) => {
-                        self.src.push_str("enum<");
-                        for (i, f) in enum_.cases.iter().enumerate() {
-                            if i > 0 {
-                                self.src.push_str(", ");
-                            }
-                            self.src.push_str(&f.name);
-                        }
-                        self.src.push_str(">");
-                    }
-                    TypeDefKind::Union(union) => {
-                        self.src.push_str("union<");
-                        for (i, f) in union.cases.iter().enumerate() {
-                            if i > 0 {
-                                self.src.push_str(", ");
-                            }
-                            self.print_ty(iface, &f.ty, false);
-                        }
-                        self.src.push_str(">");
-                    }
-                    TypeDefKind::Future(t) => {
-                        self.src.push_str("future");
-                        if let Some(ty) = t {
-                            self.src.push_str("<");
-                            self.print_ty(iface, ty, false);
-                            self.src.push_str(">");
-                        }
-                    }
-                    TypeDefKind::Stream(Stream { element, end }) => {
-                        self.src.push_str("stream");
-                        match (element, end) {
-                            (None, None) => {}
-                            (Some(element), None) => {
-                                self.src.push_str("<");
-                                self.print_ty(iface, element, false);
-                                self.src.push_str(">");
-                            }
-                            (None, Some(end)) => {
-                                self.src.push_str("<_, ");
-                                self.print_ty(iface, end, false);
-                                self.src.push_str(">");
-                            }
-                            (Some(element), Some(end)) => {
-                                self.src.push_str("<");
-                                self.print_ty(iface, element, false);
-                                self.src.push_str(", ");
-                                self.print_ty(iface, end, false);
-                                self.src.push_str(">");
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    fn docs(&mut self, docs: &Docs) {
-        let docs = match &docs.contents {
-            Some(docs) => docs,
-            None => return,
-        };
-        for line in docs.lines() {
-            self.src.push_str("  ");
-            self.src.push_str(line.trim());
-            self.src.push_str("\n");
-        }
-    }
-
-    fn print_type_header(&mut self, name: &str) {
-        if self.types == 0 {
-            self.src.push_str("# Types\n\n");
-        }
-        self.types += 1;
-        self.src.push_str(&format!(
-            "## <a href=\"#{}\" name=\"{0}\"></a> `{}`: ",
-            name.to_snake_case(),
-            name,
-        ));
-        self.hrefs
-            .insert(name.to_string(), format!("#{}", name.to_snake_case()));
-    }
-
-    fn print_type_info(&mut self, ty: TypeId, docs: &Docs) {
-        self.docs(docs);
-        self.src.push_str("\n");
-        self.src
-            .push_str(&format!("Size: {}, ", self.sizes.size(&Type::Id(ty))));
-        self.src
-            .push_str(&format!("Alignment: {}\n", self.sizes.align(&Type::Id(ty))));
-    }
+#[test]
+fn verify_cli() {
+    use clap::CommandFactory;
+    Opt::command().debug_assert()
 }
