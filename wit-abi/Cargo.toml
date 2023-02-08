@@ -8,11 +8,11 @@ publish = false
 anyhow = "1.0"
 clap = { version = "4.1.4", features = ["derive"] }
 wit-parser = "0.5.0"
-wit-bindgen-core = { git = "https://github.com/bytecodealliance/wit-bindgen", rev = "67c7d748cf561ee32e7f52e2d796501e875e4c50" }
-wit-bindgen-gen-markdown = { git = "https://github.com/bytecodealliance/wit-bindgen", rev = "67c7d748cf561ee32e7f52e2d796501e875e4c50", optional = true, features = ["clap"] }
-wit-bindgen-gen-guest-rust = { git = "https://github.com/bytecodealliance/wit-bindgen", rev = "67c7d748cf561ee32e7f52e2d796501e875e4c50", optional = true, features = ["clap"] }
-wit-bindgen-gen-guest-c = { git = "https://github.com/bytecodealliance/wit-bindgen", rev = "67c7d748cf561ee32e7f52e2d796501e875e4c50", optional = true, features = ["clap"] }
-wit-bindgen-gen-guest-teavm-java = { git = "https://github.com/bytecodealliance/wit-bindgen", rev = "67c7d748cf561ee32e7f52e2d796501e875e4c50", optional = true, features = ["clap"] }
+wit-bindgen-core = { git = "https://github.com/bytecodealliance/wit-bindgen", rev = "cd32dd862a056f81ba97c9828e15ba1358ad03f3" }
+wit-bindgen-gen-markdown = { git = "https://github.com/bytecodealliance/wit-bindgen", rev = "cd32dd862a056f81ba97c9828e15ba1358ad03f3", optional = true, features = ["clap"] }
+wit-bindgen-gen-guest-rust = { git = "https://github.com/bytecodealliance/wit-bindgen", rev = "cd32dd862a056f81ba97c9828e15ba1358ad03f3", optional = true, features = ["clap"] }
+wit-bindgen-gen-guest-c = { git = "https://github.com/bytecodealliance/wit-bindgen", rev = "cd32dd862a056f81ba97c9828e15ba1358ad03f3", optional = true, features = ["clap"] }
+wit-bindgen-gen-guest-teavm-java = { git = "https://github.com/bytecodealliance/wit-bindgen", rev = "cd32dd862a056f81ba97c9828e15ba1358ad03f3", optional = true, features = ["clap"] }
 
 [features]
 default = ['c', 'rust', 'markdown', 'teavm-java']
