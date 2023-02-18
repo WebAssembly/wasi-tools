@@ -553,7 +553,8 @@ dependencies = [
 [[package]]
 name = "wit-bindgen-core"
 version = "0.3.0"
-source = "git+https://github.com/bytecodealliance/wit-bindgen?rev=b0b9e457d56b7b18f2e9c7a876b8a6c62bcb98ca#b0b9e457d56b7b18f2e9c7a876b8a6c62bcb98ca"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ea1d49787508c06dfbeeb2c6599a20fc475547b102fc3e8637ada7d67bb62969"
 dependencies = [
  "anyhow",
  "wit-component",
@@ -563,7 +564,8 @@ dependencies = [
 [[package]]
 name = "wit-bindgen-gen-guest-c"
 version = "0.3.0"
-source = "git+https://github.com/bytecodealliance/wit-bindgen?rev=b0b9e457d56b7b18f2e9c7a876b8a6c62bcb98ca#b0b9e457d56b7b18f2e9c7a876b8a6c62bcb98ca"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "227daeb6e0ae9e13ff7d4aa109ad9a7ae7cbdd1b41321ac84b3fac4da91bfb21"
 dependencies = [
  "anyhow",
  "clap",
@@ -576,7 +578,8 @@ dependencies = [
 [[package]]
 name = "wit-bindgen-gen-guest-rust"
 version = "0.3.0"
-source = "git+https://github.com/bytecodealliance/wit-bindgen?rev=b0b9e457d56b7b18f2e9c7a876b8a6c62bcb98ca#b0b9e457d56b7b18f2e9c7a876b8a6c62bcb98ca"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ae66d141c30d008ae9ef39b266b34c481db8c0aaa688c1431d04b8b8f3247d4"
 dependencies = [
  "clap",
  "heck",
@@ -588,7 +591,8 @@ dependencies = [
 [[package]]
 name = "wit-bindgen-gen-guest-teavm-java"
 version = "0.3.0"
-source = "git+https://github.com/bytecodealliance/wit-bindgen?rev=b0b9e457d56b7b18f2e9c7a876b8a6c62bcb98ca#b0b9e457d56b7b18f2e9c7a876b8a6c62bcb98ca"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77c824cfa9be728f4f078ac647b7cb06ba087218f6e8e21271b8f8cc6da1074e"
 dependencies = [
  "clap",
  "heck",
@@ -599,7 +603,8 @@ dependencies = [
 [[package]]
 name = "wit-bindgen-gen-markdown"
 version = "0.3.0"
-source = "git+https://github.com/bytecodealliance/wit-bindgen?rev=b0b9e457d56b7b18f2e9c7a876b8a6c62bcb98ca#b0b9e457d56b7b18f2e9c7a876b8a6c62bcb98ca"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c2e16bb320e92c0eab971144e130193b2c91f2a270fb040098d7e05fc376287"
 dependencies = [
  "clap",
  "heck",
@@ -611,7 +616,8 @@ dependencies = [
 [[package]]
 name = "wit-bindgen-gen-rust-lib"
 version = "0.3.0"
-source = "git+https://github.com/bytecodealliance/wit-bindgen?rev=b0b9e457d56b7b18f2e9c7a876b8a6c62bcb98ca#b0b9e457d56b7b18f2e9c7a876b8a6c62bcb98ca"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4b7e9138be66f508243c62d3d565fc03ce43ed04f3fc19a5fe8d3fb7f69f3fe4"
 dependencies = [
  "heck",
  "wit-bindgen-core",
@@ -636,9 +642,9 @@ dependencies = [
 
 [[package]]
 name = "wit-parser"
-version = "0.6.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e0fe225a32528b42a7037add1b5ed1dff83288f21a067007b34565ce87fc2c7"
+checksum = "a84965789410bf21087f5a352703142f77b9b4d1478764c3f33a1ea8c7101f40"
 dependencies = [
  "anyhow",
  "id-arena",
