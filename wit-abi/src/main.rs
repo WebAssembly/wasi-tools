@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::Parser;
 use std::path::PathBuf;
 use std::str;
@@ -18,7 +18,7 @@ enum Opt {
     #[cfg(feature = "markdown")]
     Markdown {
         #[clap(flatten)]
-        opts: wit_bindgen_gen_markdown::Opts,
+        opts: wit_bindgen_markdown::Opts,
         #[clap(flatten)]
         args: Common,
     },
@@ -26,7 +26,7 @@ enum Opt {
     #[cfg(feature = "rust")]
     Rust {
         #[clap(flatten)]
-        opts: wit_bindgen_gen_guest_rust::Opts,
+        opts: wit_bindgen_rust::Opts,
         #[clap(flatten)]
         args: Common,
     },
@@ -34,7 +34,7 @@ enum Opt {
     #[cfg(feature = "c")]
     C {
         #[clap(flatten)]
-        opts: wit_bindgen_gen_guest_c::Opts,
+        opts: wit_bindgen_c::Opts,
         #[clap(flatten)]
         args: Common,
     },
@@ -43,7 +43,15 @@ enum Opt {
     #[cfg(feature = "teavm-java")]
     TeavmJava {
         #[clap(flatten)]
-        opts: wit_bindgen_gen_guest_teavm_java::Opts,
+        opts: wit_bindgen_teavm_java::Opts,
+        #[clap(flatten)]
+        args: Common,
+    },
+    /// Generates bindings for TinyGo-based Go guest modules.
+    #[cfg(feature = "go")]
+    TinyGo {
+        #[clap(flatten)]
+        opts: wit_bindgen_go::Opts,
         #[clap(flatten)]
         args: Common,
     },
@@ -83,6 +91,8 @@ fn main() -> Result<()> {
         Opt::Rust { opts, args } => (opts.build(), args),
         #[cfg(feature = "teavm-java")]
         Opt::TeavmJava { opts, args } => (opts.build(), args),
+        #[cfg(feature = "go")]
+        Opt::TinyGo { opts, args } => (opts.build(), args),
     };
 
     gen_world(generator, &opt, &mut files)?;
@@ -137,49 +147,9 @@ fn gen_world(
     let pkg = if opts.wit.is_dir() {
         resolve.push_dir(&opts.wit)?.0
     } else {
-        resolve.push(
-            UnresolvedPackage::parse_file(&opts.wit)?,
-            &Default::default(),
-        )?
+        resolve.push(UnresolvedPackage::parse_file(&opts.wit)?)?
     };
-    let world = match &opts.world {
-        Some(world) => {
-            let mut parts = world.splitn(2, '.');
-            let doc = parts.next().unwrap();
-            let world = parts.next();
-            let doc = *resolve.packages[pkg]
-                .documents
-                .get(doc)
-                .ok_or_else(|| anyhow!("no document named `{doc}` in package"))?;
-            match world {
-                Some(name) => *resolve.documents[doc]
-                    .worlds
-                    .get(name)
-                    .ok_or_else(|| anyhow!("no world named `{name}` in document"))?,
-                None => resolve.documents[doc]
-                    .default_world
-                    .ok_or_else(|| anyhow!("no default world in document"))?,
-            }
-        }
-        None => {
-            if resolve.packages[pkg].documents.is_empty() {
-                bail!("no documents found in package")
-            }
-
-            let mut unique_default_world = None;
-            for (_name, doc) in &resolve.documents {
-                if let Some(default_world) = doc.default_world {
-                    if unique_default_world.is_some() {
-                        bail!("multiple default worlds found in package, specify which to bind with `--world` argument")
-                    } else {
-                        unique_default_world = Some(default_world);
-                    }
-                }
-            }
-
-            unique_default_world.ok_or_else(|| anyhow!("no default world in package"))?
-        }
-    };
+    let world = resolve.select_world(pkg, opts.world.as_deref())?;
     generator.generate(&resolve, world, files);
     Ok(())
 }
