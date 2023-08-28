@@ -500,6 +500,7 @@ dependencies = [
  "clap",
  "wit-bindgen-c",
  "wit-bindgen-core",
+ "wit-bindgen-go",
  "wit-bindgen-markdown",
  "wit-bindgen-rust",
  "wit-bindgen-teavm-java",
@@ -529,6 +530,20 @@ dependencies = [
  "anyhow",
  "wit-component",
  "wit-parser",
+]
+
+[[package]]
+name = "wit-bindgen-go"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77ebd992853b6e1ec879171e66cc442e09679967f246c50867b0c254a2bfa2ad"
+dependencies = [
+ "anyhow",
+ "clap",
+ "heck",
+ "wit-bindgen-c",
+ "wit-bindgen-core",
+ "wit-component",
 ]
 
 [[package]]
