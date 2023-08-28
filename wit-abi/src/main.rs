@@ -150,7 +150,7 @@ fn gen_world(
         resolve.push(UnresolvedPackage::parse_file(&opts.wit)?)?
     };
     let world = resolve.select_world(pkg, opts.world.as_deref())?;
-    generator.generate(&resolve, world, files);
+    let _ = generator.generate(&resolve, world, files);
     Ok(())
 }
 
